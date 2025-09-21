@@ -129,7 +129,7 @@ const Index = () => {
 
             {/* Merchant Management */}
 
-            {/* Under Development */}
+            {/* Under Development - TODO */}
             <Route path="/messages" element={<PageUnderDevelopment />} />
             <Route path="/earnings" element={<PageUnderDevelopment />} />
             <Route path="/reviews" element={<PageUnderDevelopment />} />
