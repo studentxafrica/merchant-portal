@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Store, Mail, Lock } from 'lucide-react';
+import { Store, Mail, Lock, EyeOff, Eye } from 'lucide-react';
 import { mockMerchants } from '@/data/mockData';
 import { useToast } from '@/hooks/use-toast';
 import { setCurrentUser } from '@/state/auth';
@@ -16,6 +16,7 @@ export const LoginForm = () => {
   const [email, setEmail] = useState('');
   const next = new URLSearchParams(useLocation().search).get('next');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const dispatch = useDispatch();
@@ -88,13 +89,22 @@ export const LoginForm = () => {
                 <Lock className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                 <Input
                   id="password"
-                  type="password"
+                  type={passwordVisible ? "text" : "password"}
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10"
                   required
                 />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-3 top-3 h-4 w-4 text-gray-400 hover:text-gray-600"
+                  onClick={() => setPasswordVisible(!passwordVisible)}
+                >
+                  {passwordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
               </div>
               <div className="flex justify-between flex-wrap items-center mt-4">
                 <p className="text-xs text-gray-500 mt-1">

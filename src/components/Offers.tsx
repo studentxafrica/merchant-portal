@@ -90,6 +90,7 @@ import { Category } from '@/types/category';
 import { useNavigate } from 'react-router-dom';
 import { useConfirmModal } from '@/hooks/use-confirm-modal';
 import { ConfirmModal } from './confirmModal';
+import { CsvUploadWizard } from './CsvUploadWizard';
 import OpenAI from "openai";
 
 interface Offer {
@@ -238,6 +239,9 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 	console.log(selectedOffer?.tags, recommendedTags);
 	const { isOpen, openModal, closeModal, modalProps } = useConfirmModal();
 	const [updatingOffer, setUpdatingOffer] = useState(false);
+	const [createdOfferId, setCreatedOfferId] = useState<string | null>(null);
+	const [showImportPrompt, setShowImportPrompt] = useState(false);
+	const [showCsvUploadWizard, setShowCsvUploadWizard] = useState(false);
 
 	// New offer state with additional fields
 	const [newOffer, setNewOffer] = useState<Partial<Offer>>({
@@ -399,6 +403,10 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 					tags: [],
 					stores: [],
 				});
+
+				// Show import prompt instead of just a toast
+				setCreatedOfferId(response.data.data.id);
+				setShowImportPrompt(true);
 
 				toast({
 					title: "Offer created successfully",
@@ -585,6 +593,57 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 				isOpen={isOpen}
 				onClose={closeModal}
 				{...modalProps}
+			/>
+
+			{/* Post-creation import prompt */}
+			<Dialog open={showImportPrompt} onOpenChange={setShowImportPrompt}>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<Check className="h-5 w-5 text-green-600" />
+							Offer Created Successfully!
+						</DialogTitle>
+						<DialogDescription>
+							Would you like to import coupon codes from your POS system for this offer?
+						</DialogDescription>
+					</DialogHeader>
+					<div className="flex flex-col gap-2 pt-2">
+						<Button
+							className="w-full bg-blue-600 hover:bg-blue-700"
+							onClick={() => {
+								setShowImportPrompt(false);
+								setShowCsvUploadWizard(true);
+							}}
+						>
+							Yes, Import Coupons Now
+						</Button>
+						<Button
+							variant="outline"
+							className="w-full"
+							onClick={() => {
+								setShowImportPrompt(false);
+								setCreatedOfferId(null);
+							}}
+						>
+							Maybe Later
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+
+			{/* CSV Upload Wizard (from offer creation flow) */}
+			<CsvUploadWizard
+				open={showCsvUploadWizard}
+				onOpenChange={(val) => {
+					setShowCsvUploadWizard(val);
+					if (!val) setCreatedOfferId(null);
+				}}
+				preselectedOfferId={createdOfferId || undefined}
+				merchant={merchant}
+				onComplete={() => {
+					fetchMerchantOffers();
+					setCreatedOfferId(null);
+				}}
 			/>
 
 			{/* Header */}
@@ -864,7 +923,7 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 												<Label className="text-lg font-semibold">Usage Type</Label>
 												<p className="text-sm text-gray-600">Choose how students can use your offer</p>
 											</div>
-											
+
 											<div className="space-y-3">
 												{/* Single Use Option */}
 												<div className={`border rounded-lg p-3 cursor-pointer transition-colors ${newOffer.usage_type === UsageType.SINGLE_USE ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}

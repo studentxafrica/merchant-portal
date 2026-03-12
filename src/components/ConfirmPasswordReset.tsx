@@ -62,6 +62,7 @@ const ConfirmPasswordReset = () => {
 				description: 'You can now log in with your new password.',
 				variant: 'success',
 			});
+			navigate('/login');
 		} catch (error) {
 			console.error('Error verifying token:', error);
 			setError(error.response?.data.message || 'Invalid or expired token');
