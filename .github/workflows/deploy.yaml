@@ -10,7 +10,7 @@ jobs:
     name: Build and Deploy Frontend
     runs-on: ubuntu-latest
     env:
-      VITE_SERVER_HEAD: https://dev.api.studentx.co.ke/api/v1
+      VITE_SERVER_HEAD: https://api.studentx.co.ke/api/v1
     defaults:
       run:
         working-directory: ./
