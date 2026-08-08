@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import axiosInstance from '@/api/axios';
 import { Merchant } from '@/types/user';
-import { OfferType, UsageType } from '@/types/offer';
+import { OfferType, UsageType, OfferKind } from '@/types/offer';
 import { Helmet } from 'react-helmet-async';
 import {
 	Card,
@@ -82,6 +82,9 @@ import {
 	Clock,
 	Settings,
 	Info,
+	Percent,
+	Video,
+	Link2,
 } from 'lucide-react';
 // import { mockOffers, mockCategories } from '@/data/mockData';
 import { DatePicker } from "@/components/ui/date-picker";
@@ -90,6 +93,7 @@ import { Category } from '@/types/category';
 import { useNavigate } from 'react-router-dom';
 import { useConfirmModal } from '@/hooks/use-confirm-modal';
 import { ConfirmModal } from './confirmModal';
+import { CsvUploadWizard } from './CsvUploadWizard';
 import OpenAI from "openai";
 
 interface Offer {
@@ -98,6 +102,8 @@ interface Offer {
 	description: string;
 	slug: string;
 	coverImage: string;
+	offerKind?: OfferKind;
+	eventUrl?: string;
 	discountType: OfferType;
 	discountValue: number;
 	redemptionType: string;
@@ -140,38 +146,53 @@ interface OfferManagementProps {
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8'];
 
-const OfferCreationSteps = [
-	{
+const OfferCreationSteps = {
+	'basic-info': {
 		id: 'basic-info',
 		title: 'Basic Information',
 		description: 'Provide essential details about your offer',
 	},
-	{
+	'discount-details': {
 		id: 'discount-details',
 		title: 'Discount Details',
 		description: 'Set up your discount type and value',
 	},
-	{
+	'event-details': {
+		id: 'event-details',
+		title: 'Event Details',
+		description: 'Add the link students receive when they register',
+	},
+	'usage-config': {
 		id: 'usage-config',
 		title: 'Usage Configuration',
 		description: 'Configure how often students can use your offer',
 	},
-	{
+	'redemption': {
 		id: 'redemption',
 		title: 'Redemption Options',
 		description: 'Configure how students can redeem your offer',
 	},
-	{
+	'registration': {
+		id: 'registration',
+		title: 'Registration Options',
+		description: 'Set how many students can register and for how long',
+	},
+	'visuals': {
 		id: 'visuals',
 		title: 'Visuals & Branding',
 		description: 'Upload images and set offer appearance',
 	},
-	{
+	'review': {
 		id: 'review',
 		title: 'Review & Publish',
 		description: 'Preview and launch your offer',
 	},
-];
+};
+
+const DISCOUNT_OFFER_STEPS = ['basic-info', 'discount-details', 'usage-config', 'redemption', 'visuals', 'review'];
+const EVENT_OFFER_STEPS = ['basic-info', 'event-details', 'registration', 'visuals', 'review'];
+
+const isEventLink = (url?: string) => /^https?:\/\/\S+\.\S+/.test((url || '').trim());
 
 export interface AnalyticsProps {
 	totalOffers: number;
@@ -238,12 +259,17 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 	console.log(selectedOffer?.tags, recommendedTags);
 	const { isOpen, openModal, closeModal, modalProps } = useConfirmModal();
 	const [updatingOffer, setUpdatingOffer] = useState(false);
+	const [createdOfferId, setCreatedOfferId] = useState<string | null>(null);
+	const [showImportPrompt, setShowImportPrompt] = useState(false);
+	const [showCsvUploadWizard, setShowCsvUploadWizard] = useState(false);
 
 	// New offer state with additional fields
 	const [newOffer, setNewOffer] = useState<Partial<Offer>>({
 		title: '',
 		description: '',
 		coverImage: '',
+		offerKind: OfferKind.DISCOUNT,
+		eventUrl: '',
 		discountType: OfferType.PERCENTAGE,
 		discountValue: 10,
 		redemptionType: 'both',
@@ -268,6 +294,15 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 		cooldown_period_hours: undefined,
 		tier_progression: undefined,
 	});
+
+	const isEventOffer = newOffer.offerKind === OfferKind.EVENT;
+	const editingEventOffer = selectedOffer?.offerKind === OfferKind.EVENT;
+	const creationSteps = React.useMemo(
+		() => (isEventOffer ? EVENT_OFFER_STEPS : DISCOUNT_OFFER_STEPS)
+			.map(id => OfferCreationSteps[id]),
+		[isEventOffer]
+	);
+	const activeStep = creationSteps[Math.min(currentStep, creationSteps.length - 1)];
 
 	// Analytics data
 	const [analytics, setAnalytics] = useState<AnalyticsProps>({
@@ -344,12 +379,23 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 			return;
 		}
 
+		if (isEventOffer && !isEventLink(newOffer.eventUrl)) {
+			toast({
+				title: "Event link required",
+				description: "Add the link students will use to join, starting with http:// or https://",
+				variant: "destructive",
+			});
+			return;
+		}
+
 		try {
 			const response = await axiosInstance.post('/offer/new', {
 				title: newOffer.title,
 				description: newOffer.description,
 				slug: newOffer.slug || newOffer.title?.toLowerCase().replace(/\s+/g, '-'),
 				cover_image: newOffer.coverImage || 'https://via.placeholder.com/300',
+				offer_kind: newOffer.offerKind,
+				event_url: isEventOffer ? newOffer.eventUrl?.trim() : undefined,
 				discount_type: newOffer.discountType,
 				discount_value: newOffer.discountValue,
 				currency: newOffer.currency || 'USD',
@@ -362,10 +408,10 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 				tags: newOffer.tags,
 				stores: newOffer.stores,
 				// New flexible usage system fields
-				usage_type: newOffer.usage_type,
-				max_claims_per_user: newOffer.max_claims_per_user,
-				cooldown_period_hours: newOffer.cooldown_period_hours,
-				tier_progression: newOffer.usage_type === UsageType.TIERED ? {
+				usage_type: isEventOffer ? UsageType.SINGLE_USE : newOffer.usage_type,
+				max_claims_per_user: isEventOffer ? 1 : newOffer.max_claims_per_user,
+				cooldown_period_hours: isEventOffer ? undefined : newOffer.cooldown_period_hours,
+				tier_progression: !isEventOffer && newOffer.usage_type === UsageType.TIERED ? {
 					tiers: [
 						{ min_usage: 0, discount_multiplier: 1.0, name: "Bronze" },
 						{ min_usage: 3, discount_multiplier: 1.5, name: "Silver" },
@@ -375,13 +421,17 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 			});
 
 			if (response.status === 201) {
-				setOffers([...offers, response.data.data]);
+				const createdOffer = response.data.data;
+				const createdEvent = createdOffer?.offerKind === OfferKind.EVENT;
+				setOffers([...offers, createdOffer]);
 				setIsCreateModalOpen(false);
 				setCurrentStep(0);
 				setNewOffer({
 					title: '',
 					description: '',
 					coverImage: '',
+					offerKind: OfferKind.DISCOUNT,
+					eventUrl: '',
 					discountType: OfferType.PERCENTAGE,
 					discountValue: 10,
 					redemptionType: 'both',
@@ -400,9 +450,17 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 					stores: [],
 				});
 
+				// Events hand out the same link to everyone, so there is nothing to import
+				if (!createdEvent) {
+					setCreatedOfferId(createdOffer.id);
+					setShowImportPrompt(true);
+				}
+
 				toast({
-					title: "Offer created successfully",
-					description: "Your new offer is now live for students to claim!",
+					title: createdEvent ? "Event published successfully" : "Offer created successfully",
+					description: createdEvent
+						? "Students can now register and get the event link."
+						: "Your new offer is now live for students to claim!",
 					variant: "success",
 				});
 			}
@@ -423,12 +481,23 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 	};
 
 	const handleUpdateOffer = async () => {
+		const editingEvent = selectedOffer?.offerKind === OfferKind.EVENT;
+		if (editingEvent && !isEventLink(selectedOffer?.eventUrl)) {
+			toast({
+				title: "Event link required",
+				description: "Add the link students will use to join, starting with http:// or https://",
+				variant: "destructive",
+			});
+			return;
+		}
+
 		try {
 			setUpdatingOffer(true);
 			console.log("Updating offer:", selectedOffer);
 			const response = await axiosInstance.put(`/user/merchant/offers/${selectedOffer?.id}`, {
 				...selectedOffer,
 				cover_image: selectedOffer?.coverImage,
+				event_url: editingEvent ? selectedOffer?.eventUrl?.trim() : undefined,
 			});
 
 			if (response.status === 200) {
@@ -541,7 +610,7 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 	// ];
 
 	const nextStep = () => {
-		if (currentStep < OfferCreationSteps.length - 1) {
+		if (currentStep < creationSteps.length - 1) {
 			setCurrentStep(currentStep + 1);
 		}
 	};
@@ -585,6 +654,57 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 				isOpen={isOpen}
 				onClose={closeModal}
 				{...modalProps}
+			/>
+
+			{/* Post-creation import prompt */}
+			<Dialog open={showImportPrompt} onOpenChange={setShowImportPrompt}>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle className="flex items-center gap-2">
+							<Check className="h-5 w-5 text-green-600" />
+							Offer Created Successfully!
+						</DialogTitle>
+						<DialogDescription>
+							Would you like to import coupon codes from your POS system for this offer?
+						</DialogDescription>
+					</DialogHeader>
+					<div className="flex flex-col gap-2 pt-2">
+						<Button
+							className="w-full bg-blue-600 hover:bg-blue-700"
+							onClick={() => {
+								setShowImportPrompt(false);
+								setShowCsvUploadWizard(true);
+							}}
+						>
+							Yes, Import Coupons Now
+						</Button>
+						<Button
+							variant="outline"
+							className="w-full"
+							onClick={() => {
+								setShowImportPrompt(false);
+								setCreatedOfferId(null);
+							}}
+						>
+							Maybe Later
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+
+			{/* CSV Upload Wizard (from offer creation flow) */}
+			<CsvUploadWizard
+				open={showCsvUploadWizard}
+				onOpenChange={(val) => {
+					setShowCsvUploadWizard(val);
+					if (!val) setCreatedOfferId(null);
+				}}
+				preselectedOfferId={createdOfferId || undefined}
+				merchant={merchant}
+				onComplete={() => {
+					fetchMerchantOffers();
+					setCreatedOfferId(null);
+				}}
 			/>
 
 			{/* Header */}
@@ -633,17 +753,17 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 					<DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
 						<DialogHeader>
 							<DialogTitle>
-								{OfferCreationSteps[currentStep].title}
+								{activeStep.title}
 							</DialogTitle>
 							<DialogDescription>
-								{OfferCreationSteps[currentStep].description}
+								{activeStep.description}
 							</DialogDescription>
 						</DialogHeader>
 
 						{/* Progress indicator */}
 						<div className="w-full mb-6">
 							<div className="flex justify-between mb-2">
-								{OfferCreationSteps.map((step, index) => (
+								{creationSteps.map((step, index) => (
 									<div
 										key={step.id}
 										className={`flex flex-col items-center ${index <= currentStep ? 'text-blue-600' : 'text-gray-400'}`}
@@ -657,89 +777,129 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 									</div>
 								))}
 							</div>
-							<Progress value={(currentStep + 1) * (100 / OfferCreationSteps.length)} />
+							<Progress value={(currentStep + 1) * (100 / creationSteps.length)} />
 						</div>
 
 						{/* Step 1: Basic Information */}
-						{currentStep === 0 && (
-							<div className="grid grid-cols-2 gap-6">
-								<div className="space-y-4">
-									<div className="space-y-2">
-										<Label htmlFor="title">Offer Title*</Label>
-										<Input
-											id="title"
-											value={newOffer.title || ''}
-											onChange={(e) => setNewOffer({ ...newOffer, title: e.target.value })}
-											placeholder="e.g., 50% Off Large Pizza"
-											required
-										/>
-									</div>
-									<div className="space-y-2">
-										<Label htmlFor="description">Description*</Label>
-										<Textarea
-											id="description"
-											value={newOffer.description || ''}
-											onChange={(e) => setNewOffer({ ...newOffer, description: e.target.value })}
-											placeholder="Describe your offer in detail..."
-											rows={4}
-										/>
-									</div>
-									<div className="space-y-2">
-										<Label htmlFor="category">Category*</Label>
-										<Select
-											value={newOffer.category?.id || ''}
-											onValueChange={(value) => {
-												const selectedCategory = categories.find((cat) => cat.id === value);
-												setNewOffer({
-													...newOffer,
-													category: selectedCategory
-														? { id: selectedCategory.id, name: selectedCategory.name }
-														: { id: value, name: '' }
-												});
-											}}
+						{activeStep.id === 'basic-info' && (
+							<div className="space-y-6">
+								<div className="space-y-2">
+									<Label>What are you offering students?*</Label>
+									<div className="grid grid-cols-2 gap-3">
+										<div
+											className={`border rounded-lg p-3 cursor-pointer transition-colors ${!isEventOffer ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
+											onClick={() => setNewOffer({ ...newOffer, offerKind: OfferKind.DISCOUNT })}
 										>
-											<SelectTrigger>
-												<SelectValue placeholder="Select category" />
-											</SelectTrigger>
-											<SelectContent>
-												{categories.map((category) => (
-													<SelectItem key={category.id} value={category.id}>
-														{category.name}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
+											<div className="flex items-center space-x-3">
+												<Percent className="h-5 w-5 text-blue-600" />
+												<div>
+													<h4 className="font-medium">Discount</h4>
+													<p className="text-sm text-gray-600">Students claim a coupon code to save money</p>
+												</div>
+											</div>
+										</div>
+										<div
+											className={`border rounded-lg p-3 cursor-pointer transition-colors ${isEventOffer ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}
+											onClick={() => setNewOffer({
+												...newOffer,
+												offerKind: OfferKind.EVENT,
+												usage_type: UsageType.SINGLE_USE,
+												max_claims_per_user: 1,
+												cooldown_period_hours: undefined,
+											})}
+										>
+											<div className="flex items-center space-x-3">
+												<Video className="h-5 w-5 text-indigo-600" />
+												<div>
+													<h4 className="font-medium">Event registration</h4>
+													<p className="text-sm text-gray-600">Students register and get your event link</p>
+												</div>
+											</div>
+										</div>
 									</div>
 								</div>
-								<div className="space-y-4">
-									<div className="space-y-2">
-										<Label>Cover Image</Label>
-										<div className="border-2 border-dashed rounded-lg p-4 flex flex-col items-center">
-											{newOffer.coverImage ? (
-												<img
-													src={newOffer.coverImage}
-													alt="Preview"
-													className="w-full h-48 object-cover rounded-md"
-												/>
-											) : (
-												<div className="w-full h-48 bg-gray-100 rounded-md flex items-center justify-center">
-													<span className="text-gray-500">No image selected</span>
-												</div>
-											)}
+
+								<div className="grid grid-cols-2 gap-6">
+									<div className="space-y-4">
+										<div className="space-y-2">
+											<Label htmlFor="title">{isEventOffer ? 'Event Title*' : 'Offer Title*'}</Label>
 											<Input
-												type="file"
-												accept="image/*"
-												onChange={handleImageUpload}
-												className="mt-4"
+												id="title"
+												value={newOffer.title || ''}
+												onChange={(e) => setNewOffer({ ...newOffer, title: e.target.value })}
+												placeholder={isEventOffer ? "e.g., Careers in Tech Webinar" : "e.g., 50% Off Large Pizza"}
+												required
 											/>
+										</div>
+										<div className="space-y-2">
+											<Label htmlFor="description">Description*</Label>
+											<Textarea
+												id="description"
+												value={newOffer.description || ''}
+												onChange={(e) => setNewOffer({ ...newOffer, description: e.target.value })}
+												placeholder={isEventOffer
+													? "What the event covers, when it starts, who should join..."
+													: "Describe your offer in detail..."}
+												rows={4}
+											/>
+										</div>
+										<div className="space-y-2">
+											<Label htmlFor="category">Category*</Label>
+											<Select
+												value={newOffer.category?.id || ''}
+												onValueChange={(value) => {
+													const selectedCategory = categories.find((cat) => cat.id === value);
+													setNewOffer({
+														...newOffer,
+														category: selectedCategory
+															? { id: selectedCategory.id, name: selectedCategory.name }
+															: { id: value, name: '' }
+													});
+												}}
+											>
+												<SelectTrigger>
+													<SelectValue placeholder="Select category" />
+												</SelectTrigger>
+												<SelectContent>
+													{categories.map((category) => (
+														<SelectItem key={category.id} value={category.id}>
+															{category.name}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</div>
+									</div>
+									<div className="space-y-4">
+										<div className="space-y-2">
+											<Label>Cover Image</Label>
+											<div className="border-2 border-dashed rounded-lg p-4 flex flex-col items-center">
+												{newOffer.coverImage ? (
+													<img
+														src={newOffer.coverImage}
+														alt="Preview"
+														className="w-full h-48 object-cover rounded-md"
+													/>
+												) : (
+													<div className="w-full h-48 bg-gray-100 rounded-md flex items-center justify-center">
+														<span className="text-gray-500">No image selected</span>
+													</div>
+												)}
+												<Input
+													type="file"
+													accept="image/*"
+													onChange={handleImageUpload}
+													className="mt-4"
+												/>
+											</div>
 										</div>
 									</div>
 								</div>
 							</div>
 						)}
 
-						{/* Step 2: Discount Details */}
-						{currentStep === 1 && (
+						{/* Step 2 (discount offers): Discount Details */}
+						{activeStep.id === 'discount-details' && (
 							<div className="grid grid-cols-2 gap-6">
 								<div className="space-y-4">
 									<div className="space-y-2">
@@ -853,8 +1013,81 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 							</div>
 						)}
 
-						{/* Step 3: Usage Configuration */}
-						{currentStep === 2 && (
+						{/* Step 2 (event offers): Event Details */}
+						{activeStep.id === 'event-details' && (
+							<div className="grid grid-cols-2 gap-6">
+								<div className="space-y-4">
+									<div className="space-y-2">
+										<Label htmlFor="eventUrl">Event Link*</Label>
+										<div className="flex items-center space-x-2">
+											<Link2 className="h-4 w-4 text-gray-400" />
+											<Input
+												id="eventUrl"
+												type="url"
+												value={newOffer.eventUrl || ''}
+												onChange={(e) => setNewOffer({ ...newOffer, eventUrl: e.target.value })}
+												placeholder="https://meet.google.com/abc-defg-hij"
+												required
+											/>
+										</div>
+										<p className="text-xs text-gray-600">
+											Meeting link, ticket page or anything else students need to attend.
+										</p>
+										{newOffer.eventUrl && !isEventLink(newOffer.eventUrl) && (
+											<p className="text-xs text-red-600">
+												Enter a full link starting with http:// or https://
+											</p>
+										)}
+									</div>
+									<div className="space-y-2">
+										<Label htmlFor="event-terms">Terms and Conditions</Label>
+										<Textarea
+											id="event-terms"
+											value={newOffer.termsAndConditions || ''}
+											onChange={(e) => setNewOffer({ ...newOffer, termsAndConditions: e.target.value })}
+											placeholder="Attendance rules, what to bring, cancellation policy..."
+											rows={5}
+										/>
+									</div>
+								</div>
+								<div className="space-y-4">
+									<Card className="p-4">
+										<div className="flex items-start space-x-2">
+											<Info className="h-4 w-4 text-indigo-600 mt-0.5" />
+											<div className="text-sm space-y-2 text-gray-600">
+												<p className="font-medium text-gray-900">How students get in</p>
+												<p>
+													Registering reveals this link and a QR code for it. Everyone
+													who registers sees the same link, so there are no codes to
+													generate, import or hand out.
+												</p>
+												<p>
+													You can update the link later and every student who already
+													registered will see the new one.
+												</p>
+											</div>
+										</div>
+									</Card>
+									<Card className="p-4">
+										<Label className="text-sm text-gray-500">What students see</Label>
+										<div className="mt-3 flex items-center space-x-3">
+											<div className="w-16 h-16 bg-gray-100 rounded-md flex items-center justify-center">
+												<Video className="h-6 w-6 text-indigo-600" />
+											</div>
+											<div className="min-w-0">
+												<p className="font-medium truncate">{newOffer.title || 'Your Event Title'}</p>
+												<p className="text-xs text-gray-500 truncate">
+													{newOffer.eventUrl || 'Your event link appears here'}
+												</p>
+											</div>
+										</div>
+									</Card>
+								</div>
+							</div>
+						)}
+
+						{/* Step 3 (discount offers): Usage Configuration */}
+						{activeStep.id === 'usage-config' && (
 							<div className="space-y-6">
 								<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 									{/* Usage Type Selection */}
@@ -864,7 +1097,7 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 												<Label className="text-lg font-semibold">Usage Type</Label>
 												<p className="text-sm text-gray-600">Choose how students can use your offer</p>
 											</div>
-											
+
 											<div className="space-y-3">
 												{/* Single Use Option */}
 												<div className={`border rounded-lg p-3 cursor-pointer transition-colors ${newOffer.usage_type === UsageType.SINGLE_USE ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
@@ -1006,8 +1239,8 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 							</div>
 						)}
 
-						{/* Step 4: Redemption Options */}
-						{currentStep === 3 && (
+						{/* Step 4 (discount offers): Redemption Options */}
+						{activeStep.id === 'redemption' && (
 							<div className="grid grid-cols-2 gap-6">
 								<div className="space-y-4">
 									<div className="space-y-2">
@@ -1122,8 +1355,70 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 							</div>
 						)}
 
-						{/* Step 5: Visuals & Branding */}
-						{currentStep === 4 && (
+						{/* Step 3 (event offers): Registration Options */}
+						{activeStep.id === 'registration' && (
+							<div className="grid grid-cols-2 gap-6">
+								<div className="space-y-4">
+									<div className="space-y-2">
+										<Label htmlFor="registrationLimit">Registration Limit*</Label>
+										<Input
+											id="registrationLimit"
+											type="number"
+											min="1"
+											value={newOffer.coupons?.total || 0}
+											onChange={(e) => setNewOffer({
+												...newOffer,
+												coupons: { ...newOffer.coupons, total: Number(e.target.value) }
+											})}
+											placeholder="100"
+										/>
+										<p className="text-xs text-gray-600">
+											How many students can register before the event is full.
+										</p>
+									</div>
+									<div className="space-y-2">
+										<Label htmlFor="registrationWindow">Registration Window*</Label>
+										<div className="grid grid-cols-2 gap-4">
+											<div>
+												<Label htmlFor="eventStartDate">Opens</Label>
+												<DatePicker
+													selected={newOffer.startDate ? new Date(newOffer.startDate) : new Date()}
+													onChange={(date) => setNewOffer({ ...newOffer, startDate: date })}
+												/>
+											</div>
+											<div>
+												<Label htmlFor="eventEndDate">Closes</Label>
+												<DatePicker
+													selected={newOffer.endDate ? new Date(newOffer.endDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)}
+													onChange={(date) => setNewOffer({ ...newOffer, endDate: date })}
+													minDate={newOffer.startDate ? new Date(newOffer.startDate) : new Date()}
+												/>
+											</div>
+										</div>
+										<p className="text-xs text-gray-600">
+											Students keep access to the event link until registration closes.
+										</p>
+									</div>
+								</div>
+								<div className="space-y-4">
+									<Card className="p-4">
+										<div className="flex items-center justify-between">
+											<div>
+												<p className="text-sm text-gray-500">Seats available</p>
+												<p className="text-xl font-semibold">{newOffer.coupons?.total || 0}</p>
+											</div>
+											<Users className="h-8 w-8 text-indigo-500" />
+										</div>
+										<p className="text-xs text-gray-500 mt-2">
+											Each student can register once, so this is your headcount cap.
+										</p>
+									</Card>
+								</div>
+							</div>
+						)}
+
+						{/* Visuals & Branding */}
+						{activeStep.id === 'visuals' && (
 							<div className="space-y-6">
 								<div className="space-y-2">
 									<Label>Offer Preview</Label>
@@ -1149,13 +1444,15 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 												</p>
 												<div className="mt-2">
 													<Badge variant="default">
-														{newOffer.discountType === 'percentage'
-															? `${newOffer.discountValue || 0}% OFF`
-															: newOffer.discountType === 'fixed_amount'
-																? `$${newOffer.discountValue || 0} OFF`
-																: newOffer.discountType === 'buy_one_get_one'
-																	? 'BUY 1 GET 1'
-																	: 'FREE ITEM'}
+														{isEventOffer
+															? 'EVENT'
+															: newOffer.discountType === 'percentage'
+																? `${newOffer.discountValue || 0}% OFF`
+																: newOffer.discountType === 'fixed_amount'
+																	? `$${newOffer.discountValue || 0} OFF`
+																	: newOffer.discountType === 'buy_one_get_one'
+																		? 'BUY 1 GET 1'
+																		: 'FREE ITEM'}
 													</Badge>
 												</div>
 											</div>
@@ -1187,8 +1484,8 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 							</div>
 						)}
 
-						{/* Step 6: Review & Publish */}
-						{currentStep === 5 && (
+						{/* Review & Publish */}
+						{activeStep.id === 'review' && (
 							<div className="space-y-6">
 								<div className="grid grid-cols-2 gap-6">
 									<div className="space-y-4">
@@ -1206,70 +1503,99 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 											<p>{newOffer.category?.name || 'Not selected'}</p>
 										</div>
 									</div>
-									<div className="space-y-4">
-										<h4 className="font-semibold">Discount Information</h4>
-										<div className="space-y-2">
-											<p className="text-sm text-gray-500">Discount Type</p>
-											<p>
-												{newOffer.discountType === 'percentage'
-													? 'Percentage Off'
-													: newOffer.discountType === 'fixed_amount'
-														? 'Fixed Amount Off'
-														: newOffer.discountType === 'buy_one_get_one'
-															? 'Buy One Get One'
-															: 'Free Item'}
-											</p>
-										</div>
-										<div className="space-y-2">
-											<p className="text-sm text-gray-500">Discount Value</p>
-											<p>
-												{newOffer.discountType === 'percentage'
-													? `${newOffer.discountValue}%`
-													: `$${newOffer.discountValue}`}
-											</p>
-										</div>
-										<div className="space-y-2">
-											<p className="text-sm text-gray-500">Redemption Type</p>
-											<p>
-												{newOffer.redemptionType === 'in-store'
-													? 'In-Store Only'
-													: newOffer.redemptionType === 'online'
-														? 'Online Only'
-														: 'Both In-Store and Online'}
-											</p>
-										</div>
-									</div>
-									<div className="space-y-4">
-										<h4 className="font-semibold">Usage Configuration</h4>
-										<div className="space-y-2">
-											<p className="text-sm text-gray-500">Usage Type</p>
-											<p>
-												{newOffer.usage_type === UsageType.SINGLE_USE
-													? 'One-time Use'
-													: newOffer.usage_type === UsageType.MULTI_USE
-														? `Multi-use (up to ${newOffer.max_claims_per_user}x)`
-														: newOffer.usage_type === UsageType.UNLIMITED
-															? 'Unlimited'
-															: `Tiered Rewards (up to ${newOffer.max_claims_per_user}x)`}
-											</p>
-										</div>
-										{newOffer.cooldown_period_hours && (
-											<div className="space-y-2">
-												<p className="text-sm text-gray-500">Cooldown Period</p>
-												<p>{newOffer.cooldown_period_hours} hours</p>
+									{isEventOffer ? (
+										<>
+											<div className="space-y-4">
+												<h4 className="font-semibold">Event Access</h4>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Event Link</p>
+													<p className="break-all">{newOffer.eventUrl || 'Not set'}</p>
+												</div>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Shared with</p>
+													<p>Every student who registers, as a link and QR code</p>
+												</div>
 											</div>
-										)}
-									</div>
+											<div className="space-y-4">
+												<h4 className="font-semibold">Registration</h4>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Registration Limit</p>
+													<p>{newOffer.coupons?.total || 0} students</p>
+												</div>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Per Student</p>
+													<p>One registration</p>
+												</div>
+											</div>
+										</>
+									) : (
+										<>
+											<div className="space-y-4">
+												<h4 className="font-semibold">Discount Information</h4>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Discount Type</p>
+													<p>
+														{newOffer.discountType === 'percentage'
+															? 'Percentage Off'
+															: newOffer.discountType === 'fixed_amount'
+																? 'Fixed Amount Off'
+																: newOffer.discountType === 'buy_one_get_one'
+																	? 'Buy One Get One'
+																	: 'Free Item'}
+													</p>
+												</div>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Discount Value</p>
+													<p>
+														{newOffer.discountType === 'percentage'
+															? `${newOffer.discountValue}%`
+															: `$${newOffer.discountValue}`}
+													</p>
+												</div>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Redemption Type</p>
+													<p>
+														{newOffer.redemptionType === 'in-store'
+															? 'In-Store Only'
+															: newOffer.redemptionType === 'online'
+																? 'Online Only'
+																: 'Both In-Store and Online'}
+													</p>
+												</div>
+											</div>
+											<div className="space-y-4">
+												<h4 className="font-semibold">Usage Configuration</h4>
+												<div className="space-y-2">
+													<p className="text-sm text-gray-500">Usage Type</p>
+													<p>
+														{newOffer.usage_type === UsageType.SINGLE_USE
+															? 'One-time Use'
+															: newOffer.usage_type === UsageType.MULTI_USE
+																? `Multi-use (up to ${newOffer.max_claims_per_user}x)`
+																: newOffer.usage_type === UsageType.UNLIMITED
+																	? 'Unlimited'
+																	: `Tiered Rewards (up to ${newOffer.max_claims_per_user}x)`}
+													</p>
+												</div>
+												{newOffer.cooldown_period_hours && (
+													<div className="space-y-2">
+														<p className="text-sm text-gray-500">Cooldown Period</p>
+														<p>{newOffer.cooldown_period_hours} hours</p>
+													</div>
+												)}
+											</div>
+										</>
+									)}
 								</div>
 								<div className="space-y-4">
-									<h4 className="font-semibold">Validity</h4>
+									<h4 className="font-semibold">{isEventOffer ? 'Registration Window' : 'Validity'}</h4>
 									<div className="grid grid-cols-2 gap-4">
 										<div className="space-y-2">
-											<p className="text-sm text-gray-500">Start Date</p>
+											<p className="text-sm text-gray-500">{isEventOffer ? 'Opens' : 'Start Date'}</p>
 											<p>{newOffer.startDate?.toLocaleDateString()}</p>
 										</div>
 										<div className="space-y-2">
-											<p className="text-sm text-gray-500">End Date</p>
+											<p className="text-sm text-gray-500">{isEventOffer ? 'Closes' : 'End Date'}</p>
 											<p>{newOffer.endDate?.toLocaleDateString()}</p>
 										</div>
 									</div>
@@ -1291,14 +1617,17 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 								) : (
 									<div></div>
 								)}
-								{currentStep < OfferCreationSteps.length - 1 ? (
-									<Button onClick={nextStep}>
+								{currentStep < creationSteps.length - 1 ? (
+									<Button
+										onClick={nextStep}
+										disabled={activeStep.id === 'event-details' && !isEventLink(newOffer.eventUrl)}
+									>
 										Next
 										<ChevronRight className="h-4 w-4 ml-2" />
 									</Button>
 								) : (
 									<Button onClick={handleCreateOffer}>
-										Publish Offer
+										{isEventOffer ? 'Publish Event' : 'Publish Offer'}
 									</Button>
 								)}
 							</div>
@@ -1542,7 +1871,15 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 														/>
 													</div>
 													<div>
-														<p>{offer.title}</p>
+														<div className="flex items-center space-x-2">
+															<p>{offer.title}</p>
+															{offer.offerKind === OfferKind.EVENT && (
+																<Badge variant="secondary" className="text-xs">
+																	<Video className="h-3 w-3 mr-1" />
+																	Event
+																</Badge>
+															)}
+														</div>
 														<p className="text-xs text-gray-500">
 															{new Date(offer.startDate).toLocaleDateString()} - {new Date(offer.endDate).toLocaleDateString()}
 														</p>
@@ -1551,7 +1888,18 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 											</TableCell>
 											<TableCell>{offer.category?.name}</TableCell>
 											<TableCell>
-												{offer.discountType === 'percentage'
+												{offer.offerKind === OfferKind.EVENT ? (
+													<a
+														href={offer.eventUrl}
+														target="_blank"
+														rel="noreferrer"
+														className="text-sm text-blue-600 hover:underline inline-flex items-center max-w-[12rem]"
+														title={offer.eventUrl}
+													>
+														<Link2 className="h-3 w-3 mr-1 shrink-0" />
+														<span className="truncate">{offer.eventUrl}</span>
+													</a>
+												) : offer.discountType === 'percentage'
 													? `${offer.discountValue}%`
 													: `$${offer.discountValue}`}
 											</TableCell>
@@ -1702,12 +2050,18 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 			<Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
 				<DialogContent className="max-w-2xl">
 					<DialogHeader>
-						<DialogTitle>Edit Offer</DialogTitle>
-						<DialogDescription>Update your offer details.</DialogDescription>
+						<DialogTitle>
+							{editingEventOffer ? 'Edit Event' : 'Edit Offer'}
+						</DialogTitle>
+						<DialogDescription>
+							{editingEventOffer
+								? 'Update your event details. A new link replaces the old one for students who already registered.'
+								: 'Update your offer details.'}
+						</DialogDescription>
 					</DialogHeader>
 					<div className="grid grid-cols-2 gap-4 overflow-y-auto max-h-[75vh]">
 						<div className="space-y-2">
-							<Label htmlFor="edit-title">Offer Title</Label>
+							<Label htmlFor="edit-title">{editingEventOffer ? 'Event Title' : 'Offer Title'}</Label>
 							<Input
 								id="edit-title"
 								value={selectedOffer?.title || ''}
@@ -1773,32 +2127,55 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 								</div>
 							</div>
 						</div>
-						<div className="space-y-2">
-							<Label htmlFor="edit-discountType">Discount Type</Label>
-							<Select
-								value={selectedOffer?.discountType || ''}
-								onValueChange={(value) => setSelectedOffer({ ...selectedOffer, discountType: value as OfferType })}
-							>
-								<SelectTrigger>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="percentage">Percentage</SelectItem>
-									<SelectItem value="fixed_amount">Fixed Amount</SelectItem>
-									<SelectItem value="buy_one_get_one">Buy One Get One</SelectItem>
-									<SelectItem value="free_item">Free Item</SelectItem>
-								</SelectContent>
-							</Select>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor="edit-discountValue">Discount Value</Label>
-							<Input
-								id="edit-discountValue"
-								type="number"
-								value={selectedOffer?.discountValue || 0}
-								onChange={(e) => setSelectedOffer({ ...selectedOffer, discountValue: Number(e.target.value) })}
-							/>
-						</div>
+						{editingEventOffer ? (
+							<div className="space-y-2 col-span-2">
+								<Label htmlFor="edit-eventUrl">Event Link</Label>
+								<div className="flex items-center space-x-2">
+									<Link2 className="h-4 w-4 text-gray-400" />
+									<Input
+										id="edit-eventUrl"
+										type="url"
+										value={selectedOffer?.eventUrl || ''}
+										onChange={(e) => setSelectedOffer({ ...selectedOffer, eventUrl: e.target.value })}
+										placeholder="https://meet.google.com/abc-defg-hij"
+									/>
+								</div>
+								{selectedOffer?.eventUrl && !isEventLink(selectedOffer.eventUrl) && (
+									<p className="text-xs text-red-600">
+										Enter a full link starting with http:// or https://
+									</p>
+								)}
+							</div>
+						) : (
+							<>
+								<div className="space-y-2">
+									<Label htmlFor="edit-discountType">Discount Type</Label>
+									<Select
+										value={selectedOffer?.discountType || ''}
+										onValueChange={(value) => setSelectedOffer({ ...selectedOffer, discountType: value as OfferType })}
+									>
+										<SelectTrigger>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="percentage">Percentage</SelectItem>
+											<SelectItem value="fixed_amount">Fixed Amount</SelectItem>
+											<SelectItem value="buy_one_get_one">Buy One Get One</SelectItem>
+											<SelectItem value="free_item">Free Item</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+								<div className="space-y-2">
+									<Label htmlFor="edit-discountValue">Discount Value</Label>
+									<Input
+										id="edit-discountValue"
+										type="number"
+										value={selectedOffer?.discountValue || 0}
+										onChange={(e) => setSelectedOffer({ ...selectedOffer, discountValue: Number(e.target.value) })}
+									/>
+								</div>
+							</>
+						)}
 						<div className="space-y-2">
 							<Label htmlFor="edit-status">Status</Label>
 							<Select
@@ -1870,7 +2247,7 @@ export const ActiveOffers: React.FC<OfferManagementProps> = ({ merchant }) => {
 							Cancel
 						</Button>
 						<Button onClick={handleUpdateOffer}>
-							{updatingOffer ? 'Updating...' : 'Update Offer'}
+							{updatingOffer ? 'Updating...' : editingEventOffer ? 'Update Event' : 'Update Offer'}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

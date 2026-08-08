@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   QrCode,
   Search,
@@ -17,15 +18,18 @@ import {
   Clock,
   XCircle,
   Eye,
-  Download
+  Download,
+  Upload,
+  FileSpreadsheet,
+  Video
 } from 'lucide-react';
-import { mockCoupons, mockOffers } from '@/data/mockData';
 import { useToast } from '@/hooks/use-toast';
 import axiosInstance from '@/api/axios';
 import { Merchant } from '@/types/user';
-import { set } from 'date-fns';
 import { useConfirmModal } from '@/hooks/use-confirm-modal';
 import { ConfirmModal } from './confirmModal';
+import { CsvUploadWizard } from './CsvUploadWizard';
+import { UploadHistory } from './UploadHistory';
 
 interface Coupon {
   id: string;
@@ -35,6 +39,8 @@ interface Coupon {
     title: string;
     slug: string;
     coverImage: string;
+    offerKind?: string;
+    eventUrl?: string;
     discountType: string;
     discountValue: number;
     currency: string;
@@ -51,6 +57,10 @@ interface Coupon {
   revenueAmount?: number;
 }
 
+/** Event registrations reveal the offer's shared event link rather than a code. */
+const isEventCoupon = (coupon?: Pick<Coupon, 'offer'> | null) =>
+  coupon?.offer?.offerKind === 'event';
+
 interface CouponsManagementProps {
   merchant: Partial<Merchant>
 }
@@ -64,6 +74,8 @@ export const CouponsManagement: React.FC<CouponsManagementProps> = ({ merchant }
   const { toast } = useToast();
   const [redeemingCoupon, setRedeemingCoupon] = useState<boolean>(false);
   const { isOpen, openModal, closeModal, modalProps } = useConfirmModal();
+  const [isUploadWizardOpen, setIsUploadWizardOpen] = useState<boolean>(false);
+  const [uploadRefreshTrigger, setUploadRefreshTrigger] = useState<number>(0);
 
   const fetchCoupons = async () => {
     try {
@@ -148,8 +160,12 @@ export const CouponsManagement: React.FC<CouponsManagementProps> = ({ merchant }
 
   const filteredCoupons = coupons.filter(coupon => {
     const matchesStatus = filterStatus === 'all' || coupon.status === filterStatus;
-    const matchesSearch = coupon?.couponCode?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      coupon.consumer.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = searchTerm.toLowerCase();
+    const matchesSearch = isEventCoupon(coupon)
+      ? (coupon.offer?.eventUrl?.toLowerCase().includes(term) ||
+        coupon.consumer?.name?.toLowerCase().includes(term))
+      : (coupon?.couponCode?.toLowerCase().includes(term) ||
+        coupon.consumer?.name?.toLowerCase().includes(term));
     return matchesStatus && matchesSearch;
   });
 
@@ -191,283 +207,353 @@ export const CouponsManagement: React.FC<CouponsManagementProps> = ({ merchant }
         onClose={closeModal}
         {...modalProps}
       />
+      <CsvUploadWizard
+        open={isUploadWizardOpen}
+        onOpenChange={setIsUploadWizardOpen}
+        merchant={merchant}
+        onComplete={() => {
+          fetchCoupons();
+          setUploadRefreshTrigger(prev => prev + 1);
+        }}
+      />
       {/* Header */}
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Coupon Management</h1>
           <p className="text-gray-600 mt-1">Track and manage student coupon redemptions</p>
         </div>
+        <Button
+          onClick={() => setIsUploadWizardOpen(true)}
+          className="bg-blue-600 hover:bg-blue-700"
+          disabled={!merchant?.isApproved}
+        >
+          <Upload className="h-4 w-4 mr-2" />
+          Import Coupons
+        </Button>
       </div>
 
-      
+      <Tabs defaultValue="coupons" className="w-full">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="coupons" className="flex items-center gap-2">
+            <Ticket className="h-4 w-4" />
+            All Coupons
+          </TabsTrigger>
+          <TabsTrigger value="uploads" className="flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4" />
+            Upload History
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Coupons</CardTitle>
-            <Ticket className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalCoupons}</div>
-            <p className="text-xs text-muted-foreground">
-              Issued to students
-            </p>
-          </CardContent>
-        </Card>
+        <TabsContent value="coupons" className="space-y-6 mt-4">
+          {/* Stats Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Coupons</CardTitle>
+                <Ticket className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{totalCoupons}</div>
+                <p className="text-xs text-muted-foreground">
+                  Issued to students
+                </p>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Coupons</CardTitle>
-            <Clock className="h-4 w-4 text-yellow-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{activeCoupons}</div>
-            <p className="text-xs text-muted-foreground">
-              Ready for redemption
-            </p>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Active Coupons</CardTitle>
+                <Clock className="h-4 w-4 text-yellow-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{activeCoupons}</div>
+                <p className="text-xs text-muted-foreground">
+                  Ready for redemption
+                </p>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Redeemed</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{redeemedCoupons}</div>
-            <p className="text-xs text-muted-foreground">
-              {totalCoupons > 0 ? Math.round((redeemedCoupons / totalCoupons) * 100) : 0}% redemption rate
-            </p>
-          </CardContent>
-        </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Redeemed</CardTitle>
+                <CheckCircle className="h-4 w-4 text-green-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{redeemedCoupons}</div>
+                <p className="text-xs text-muted-foreground">
+                  {totalCoupons > 0 ? Math.round((redeemedCoupons / totalCoupons) * 100) : 0}% redemption rate
+                </p>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Revenue Generated</CardTitle>
-            <DollarSign className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${totalRevenue.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">
-              From redemptions
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters and Search */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="flex-1">
-          <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="Search by coupon code or student name..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Revenue Generated</CardTitle>
+                <DollarSign className="h-4 w-4 text-green-500" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">${totalRevenue.toFixed(2)}</div>
+                <p className="text-xs text-muted-foreground">
+                  From redemptions
+                </p>
+              </CardContent>
+            </Card>
           </div>
-        </div>
-        <div className="flex items-center space-x-2">
-          <Filter className="h-4 w-4" />
-          <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="redeemed">Redeemed</SelectItem>
-              <SelectItem value="expired">Expired</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
 
-      {/* Coupons Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Coupon Details</CardTitle>
-          <CardDescription>All coupons issued for your offers</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-3 font-medium">Coupon Code</th>
-                  <th className="text-left p-3 font-medium">Student</th>
-                  <th className="text-left p-3 font-medium">Offer</th>
-                  <th className="text-left p-3 font-medium">Status</th>
-                  <th className="text-left p-3 font-medium">Expiry Date</th>
-                  <th className="text-left p-3 font-medium">Revenue</th>
-                  <th className="text-left p-3 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredCoupons.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="p-6 text-center text-gray-500">
-                      No coupons found.
-                    </td>
-                  </tr>
-                )}
-                {
-                  filteredCoupons.map((coupon) => {
-                    return (
-                      <tr key={coupon.id} className="border-b hover:bg-gray-50">
-                        <td className="p-3">
-                          <div className="font-mono text-sm">{coupon.couponCode}</div>
-                        </td>
-                        <td className="p-3">
-                          <div>
-                            <div className="font-medium">{coupon.consumer.name}</div>
-                            <div className="text-sm text-gray-500">{coupon.consumer.email}</div>
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <div className="font-medium">{coupon.offer?.title}</div>
-                        </td>
-                        <td className="p-3">
-                          <Badge variant={getStatusColor(coupon.status)} className="flex items-center space-x-1 w-fit">
-                            {getStatusIcon(coupon.status)}
-                            <span className="capitalize">{coupon.status}</span>
-                          </Badge>
-                        </td>
-                        <td className="p-3">
-                          <div className="text-sm">
-                            {new Date(coupon.expiryDate).toLocaleDateString()}
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <div className="font-medium text-green-600">
-                            ${coupon.revenueAmount?.toFixed(2) || '0.00'}
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <div className="flex space-x-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleViewDetails(coupon)}
-                            >
-                              <Eye className="h-3 w-3" />
-                            </Button>
-                            {coupon.status === 'active' && (
-                              <Button
-                                size="sm"
-                                onClick={() => {
-                                  openModal({
-                                    title: "Redeem Coupon",
-                                    message: (
-                                      <>
-                                        Are you sure you want to redeem the coupon <span className="font-mono font-semibold">{coupon.couponCode}</span>?<br />
-                                        <span className="text-red-600">This action cannot be undone.</span>
-                                      </>
-                                    ),
-                                    confirmText: "Redeem",
-                                    cancelText: "Cancel",
-                                    variant: "default",
-                                    onConfirm: () => {
-                                      closeModal();
-                                      handleRedeemCoupon(coupon.id);
-                                    },
-                                    onClose: closeModal,
-                                  });
-                                }}
-                                disabled={!merchant?.isApproved || redeemingCoupon}
-                              >
-                                {redeemingCoupon ? 'Redeeming...' : 'Redeem'}
-                              </Button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Coupon Detail Modal */}
-      <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Coupon Details</DialogTitle>
-            <DialogDescription>Complete information about this coupon</DialogDescription>
-          </DialogHeader>
-          {selectedCoupon && (
-            <div className="space-y-4">
-              <div className="text-center flex justify-center items-center flex-col p-4 bg-gray-50 rounded-lg">
-                <div className="h-24 w-24 aspect-square max-w-xs flex items-center justify-center">
-                  <img className='w-full h-full' src={selectedCoupon.qrCode} alt={selectedCoupon.couponCode} />
-                </div>
-                <div className="font-mono text-lg font-bold">{selectedCoupon.couponCode}</div>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Student Name</label>
-                  <div className="font-medium">{selectedCoupon.consumer.name}</div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Email</label>
-                  <div className="font-medium">{selectedCoupon.consumer.email}</div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Status</label>
-                  <div className="flex items-center space-x-2">
-                    {getStatusIcon(selectedCoupon.status)}
-                    <span className="capitalize">{selectedCoupon.status}</span>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Expiry Date</label>
-                  <div className="font-medium">
-                    {new Date(selectedCoupon.expiryDate).toLocaleDateString()}
-                  </div>
-                </div>
-                {selectedCoupon.redeemedAt && (
-                  <div>
-                    <label className="text-sm font-medium text-gray-500">Redeemed On</label>
-                    <div className="font-medium">
-                      {new Date(selectedCoupon.redeemedAt).toLocaleDateString()}
-                    </div>
-                  </div>
-                )}
-                <div>
-                  <label className="text-sm font-medium text-gray-500">Revenue Generated</label>
-                  <div className="font-medium text-green-600">
-                    ${selectedCoupon.revenueAmount?.toFixed(2) || '0.00'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex space-x-2">
-                {selectedCoupon.status === 'active' && (
-                  <Button
-                    className="flex-1"
-                    onClick={() => {
-                      handleRedeemCoupon(selectedCoupon.id);
-                      setIsDetailModalOpen(false);
-                    }}
-                    disabled={!merchant?.isApproved}
-                  >
-                    Mark as Redeemed
-                  </Button>
-                )}
-                <Button variant="outline" className="flex-1">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export
-                </Button>
+          {/* Filters and Search */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                <Input
+                  placeholder="Search by coupon code or student name..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
               </div>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+            <div className="flex items-center space-x-2">
+              <Filter className="h-4 w-4" />
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="redeemed">Redeemed</SelectItem>
+                  <SelectItem value="expired">Expired</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Coupons Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Coupon Details</CardTitle>
+              <CardDescription>All coupons issued for your offers</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-3 font-medium">Code / Event Link</th>
+                      <th className="text-left p-3 font-medium">Student</th>
+                      <th className="text-left p-3 font-medium">Offer</th>
+                      <th className="text-left p-3 font-medium">Status</th>
+                      <th className="text-left p-3 font-medium">Expiry Date</th>
+                      {/* <th className="text-left p-3 font-medium">Revenue</th> */}
+                      <th className="text-left p-3 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCoupons.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-6 text-center text-gray-500">
+                          No coupons found.
+                        </td>
+                      </tr>
+                    )}
+                    {
+                      filteredCoupons.map((coupon) => {
+                        return (
+                          <tr key={coupon.id} className="border-b hover:bg-gray-50">
+                            <td className="p-3">
+                              {isEventCoupon(coupon) ? (
+                                <a
+                                  href={coupon.offer?.eventUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-sm text-blue-600 hover:underline inline-flex items-center max-w-[14rem]"
+                                  title={coupon.offer?.eventUrl}
+                                >
+                                  <Video className="h-3 w-3 mr-1 shrink-0" />
+                                  <span className="truncate">{coupon.offer?.eventUrl}</span>
+                                </a>
+                              ) : (
+                                <div className="font-mono text-sm">{coupon.couponCode}</div>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {coupon.consumer ? (
+                                <div>
+                                  <div className="font-medium">{coupon.consumer?.name}</div>
+                                  <div className="text-sm text-gray-500">{coupon.consumer?.email}</div>
+                                </div>
+                              ) : (
+                                <div className="font-medium text-center">-</div>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <div className="font-medium">{coupon.offer?.title}</div>
+                            </td>
+                            <td className="p-3">
+                              <Badge variant={getStatusColor(coupon.status)} className="flex items-center space-x-1 w-fit">
+                                {getStatusIcon(coupon.status)}
+                                <span className="capitalize">{coupon.status}</span>
+                              </Badge>
+                            </td>
+                            <td className="p-3">
+                              <div className="text-sm">
+                                {new Date(coupon.expiryDate).toLocaleDateString()}
+                              </div>
+                            </td>
+                            {/* <td className="p-3">
+                              <div className="font-medium text-green-600">
+                                ${coupon.revenueAmount?.toFixed(2) || '0.00'}
+                              </div>
+                            </td> */}
+                            <td className="p-3">
+                              <div className="flex space-x-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleViewDetails(coupon)}
+                                >
+                                  <Eye className="h-3 w-3" />
+                                </Button>
+                                {coupon.status === 'active' && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      openModal({
+                                        title: isEventCoupon(coupon) ? "Mark Attendance" : "Redeem Coupon",
+                                        message: (
+                                          <>
+                                            {isEventCoupon(coupon) ? (
+                                              <>Mark <span className="font-semibold">{coupon.consumer?.name || 'this student'}</span> as having attended <span className="font-semibold">{coupon.offer?.title}</span>?</>
+                                            ) : (
+                                              <>Are you sure you want to redeem the coupon <span className="font-mono font-semibold">{coupon.couponCode}</span>?</>
+                                            )}<br />
+                                            <span className="text-red-600">This action cannot be undone.</span>
+                                          </>
+                                        ),
+                                        confirmText: isEventCoupon(coupon) ? "Mark Attended" : "Redeem",
+                                        cancelText: "Cancel",
+                                        variant: "default",
+                                        onConfirm: () => {
+                                          closeModal();
+                                          handleRedeemCoupon(coupon.id);
+                                        },
+                                        onClose: closeModal,
+                                      });
+                                    }}
+                                    disabled={!merchant?.isApproved || redeemingCoupon}
+                                  >
+                                    {redeemingCoupon ? 'Saving...' : isEventCoupon(coupon) ? 'Mark Attended' : 'Redeem'}
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Coupon Detail Modal */}
+          <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{isEventCoupon(selectedCoupon) ? 'Registration Details' : 'Coupon Details'}</DialogTitle>
+                <DialogDescription>
+                  {isEventCoupon(selectedCoupon)
+                    ? 'Complete information about this registration'
+                    : 'Complete information about this coupon'}
+                </DialogDescription>
+              </DialogHeader>
+              {selectedCoupon && (
+                <div className="space-y-4">
+                  <div className="text-center flex justify-center items-center flex-col p-4 bg-gray-50 rounded-lg">
+                    <div className="h-24 w-24 aspect-square max-w-xs flex items-center justify-center">
+                      <img className='w-full h-full' src={selectedCoupon.qrCode} alt={selectedCoupon.offer?.title} />
+                    </div>
+                    {isEventCoupon(selectedCoupon) ? (
+                      <a
+                        href={selectedCoupon.offer?.eventUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-blue-600 hover:underline break-all text-center"
+                      >
+                        {selectedCoupon.offer?.eventUrl}
+                      </a>
+                    ) : (
+                      <div className="font-mono text-lg font-bold">{selectedCoupon.couponCode}</div>
+                    )}
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Student Name</label>
+                      <div className="font-medium">{selectedCoupon.consumer?.name || 'Unassigned'}</div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Email</label>
+                      <div className="font-medium">{selectedCoupon.consumer?.email || '—'}</div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Status</label>
+                      <div className="flex items-center space-x-2">
+                        {getStatusIcon(selectedCoupon.status)}
+                        <span className="capitalize">{selectedCoupon.status}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Expiry Date</label>
+                      <div className="font-medium">
+                        {new Date(selectedCoupon.expiryDate).toLocaleDateString()}
+                      </div>
+                    </div>
+                    {selectedCoupon.redeemedAt && (
+                      <div>
+                        <label className="text-sm font-medium text-gray-500">Redeemed On</label>
+                        <div className="font-medium">
+                          {new Date(selectedCoupon.redeemedAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <label className="text-sm font-medium text-gray-500">Revenue Generated</label>
+                      <div className="font-medium text-green-600">
+                        ${selectedCoupon.revenueAmount?.toFixed(2) || '0.00'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex space-x-2">
+                    {selectedCoupon.status === 'active' && (
+                      <Button
+                        className="flex-1"
+                        onClick={() => {
+                          handleRedeemCoupon(selectedCoupon.id);
+                          setIsDetailModalOpen(false);
+                        }}
+                        disabled={!merchant?.isApproved}
+                      >
+                        {isEventCoupon(selectedCoupon) ? 'Mark as Attended' : 'Mark as Redeemed'}
+                      </Button>
+                    )}
+                    <Button variant="outline" className="flex-1">
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+        </TabsContent>
+
+        <TabsContent value="uploads" className="mt-4">
+          <UploadHistory merchant={merchant} refreshTrigger={uploadRefreshTrigger} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

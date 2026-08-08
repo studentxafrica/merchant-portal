@@ -5,6 +5,12 @@ export enum OfferType {
 	FREE_ITEM = "free_item"
 }
 
+/** What a student gets when they claim: a discount code, or access to an event. */
+export enum OfferKind {
+	DISCOUNT = "discount",
+	EVENT = "event"
+}
+
 export enum UsageType {
 	SINGLE_USE = "single_use",
 	MULTI_USE = "multi_use",
@@ -42,6 +48,9 @@ export interface Offer {
 	description: string;
 	slug: string;
 	coverImage: string;
+	offerKind?: OfferKind;
+	/** Where the event happens. Event offers only. */
+	eventUrl?: string;
 	discountType: OfferType;
 	discountValue: number;
 	currency: string;
